@@ -354,7 +354,7 @@ func DownloadImageFromURL(url string) ([]byte, string, error) {
 			return nil
 		},
 	}
-	response, err := client.Get(url)
+	response, err := getWithRetry(client, url)
 	if err != nil {
 		return nil, "", err
 	}
@@ -411,7 +411,7 @@ func DownloadAudioFromURL(audioURL string) ([]byte, string, error) {
 		},
 	}
 
-	resp, err := client.Get(audioURL)
+	resp, err := getWithRetry(client, audioURL)
 	if err != nil {
 		return nil, "", err
 	}
@@ -502,7 +502,7 @@ func DownloadVideoFromURL(videoURL string) ([]byte, string, error) {
 		},
 	}
 
-	resp, err := client.Get(videoURL)
+	resp, err := getWithRetry(client, videoURL)
 	if err != nil {
 		return nil, "", err
 	}
@@ -618,7 +618,7 @@ func DownloadFileFromURL(fileURL string) ([]byte, string, error) {
 		},
 	}
 
-	resp, err := client.Get(fileURL)
+	resp, err := getWithRetry(client, fileURL)
 	if err != nil {
 		return nil, "", err
 	}
@@ -658,4 +658,34 @@ func DownloadFileFromURL(fileURL string) ([]byte, string, error) {
 	}
 
 	return fileData, fileName, nil
+}
+
+// getWithRetry performs a GET and retries when the server answers 404 or 5xx.
+// Chatwoot fires its webhook as soon as an agent's message is saved, which can be
+// a moment before the attachment is written to storage; the first download then
+// gets a 404 even though the file appears a second later. A few short retries
+// let those attachments go through instead of failing the whole message.
+func getWithRetry(client *http.Client, rawURL string) (*http.Response, error) {
+	delays := []time.Duration{0, 1500 * time.Millisecond, 3 * time.Second, 5 * time.Second}
+	var lastErr error
+	for i, delay := range delays {
+		if delay > 0 {
+			time.Sleep(delay)
+		}
+		resp, err := client.Get(rawURL)
+		last := i == len(delays)-1
+		if err != nil {
+			lastErr = err
+			if last {
+				return nil, err
+			}
+			continue
+		}
+		if (resp.StatusCode == http.StatusNotFound || resp.StatusCode >= 500) && !last {
+			resp.Body.Close()
+			continue
+		}
+		return resp, nil
+	}
+	return nil, lastErr
 }
